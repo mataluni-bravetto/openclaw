@@ -1,0 +1,2 @@
+#!/usr/bin/env bash
+exec ~/.abeone/bin/be keys exec --from .keys -- pnpm dev
