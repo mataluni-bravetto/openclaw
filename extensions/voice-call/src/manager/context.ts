@@ -1,6 +1,7 @@
 import type { VoiceCallConfig } from "../config.js";
 import type { VoiceCallProvider } from "../providers/base.js";
 import type { CallId, CallRecord } from "../types.js";
+import type { OutboundSession } from "./outbound-sessions.js";
 
 export type TranscriptWaiter = {
   resolve: (text: string) => void;
@@ -30,6 +31,11 @@ export type CallManagerTransientState = {
   maxDurationTimers: Map<CallId, NodeJS.Timeout>;
 };
 
+export type CallManagerOutboundSessionState = {
+  /** In-memory outbound sessions for Magic Intercept lookup */
+  outboundSessions: OutboundSession[];
+};
+
 export type CallManagerHooks = {
   /** Optional runtime hook invoked after an event transitions a call into answered state. */
   onCallAnswered?: (call: CallRecord) => void;
@@ -38,4 +44,5 @@ export type CallManagerHooks = {
 export type CallManagerContext = CallManagerRuntimeState &
   CallManagerRuntimeDeps &
   CallManagerTransientState &
+  CallManagerOutboundSessionState &
   CallManagerHooks;

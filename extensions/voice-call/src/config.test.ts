@@ -216,3 +216,135 @@ describe("normalizeVoiceCallConfig", () => {
     expect(normalized.tts?.elevenlabs?.voiceSettings).toEqual({ speed: 1.1 });
   });
 });
+
+describe("practice number validation", () => {
+  it("accepts valid practice configuration with unique numbers", () => {
+    expect(() => {
+      normalizeVoiceCallConfig({
+        provider: "mock",
+        practices: {
+          p1: {
+            name: "Practice One",
+            shieldNumber: "+15551000001",
+            spearNumber: "+15551000002",
+            voiceGreeting: "Hello from Practice One",
+            inboundSessionKey: "session-p1",
+          },
+          p2: {
+            name: "Practice Two",
+            shieldNumber: "+15552000001",
+            spearNumber: "+15552000002",
+            voiceGreeting: "Hello from Practice Two",
+            inboundSessionKey: "session-p2",
+          },
+        },
+      });
+    }).not.toThrow();
+  });
+
+  it("rejects duplicate shield numbers across practices", () => {
+    expect(() => {
+      normalizeVoiceCallConfig({
+        provider: "mock",
+        practices: {
+          p1: {
+            name: "Practice One",
+            shieldNumber: "+15551234567",
+            spearNumber: "+15551000001",
+            voiceGreeting: "Hello",
+            inboundSessionKey: "session-p1",
+          },
+          p2: {
+            name: "Practice Two",
+            shieldNumber: "+15551234567",
+            spearNumber: "+15551000002",
+            voiceGreeting: "Hello",
+            inboundSessionKey: "session-p2",
+          },
+        },
+      });
+    }).toThrow(/shield number.*is used by both.*p1.*p2/);
+  });
+
+  it("rejects duplicate spear numbers across practices", () => {
+    expect(() => {
+      normalizeVoiceCallConfig({
+        provider: "mock",
+        practices: {
+          p1: {
+            name: "Practice One",
+            shieldNumber: "+15551000001",
+            spearNumber: "+15557654321",
+            voiceGreeting: "Hello",
+            inboundSessionKey: "session-p1",
+          },
+          p2: {
+            name: "Practice Two",
+            shieldNumber: "+15551000002",
+            spearNumber: "+15557654321",
+            voiceGreeting: "Hello",
+            inboundSessionKey: "session-p2",
+          },
+        },
+      });
+    }).toThrow(/spear number.*is used by both.*p1.*p2/);
+  });
+
+  it("rejects same number used for shield and spear in same practice", () => {
+    expect(() => {
+      normalizeVoiceCallConfig({
+        provider: "mock",
+        practices: {
+          p1: {
+            name: "Practice One",
+            shieldNumber: "+15551234567",
+            spearNumber: "+15551234567",
+            voiceGreeting: "Hello",
+            inboundSessionKey: "session-p1",
+          },
+        },
+      });
+    }).toThrow(/p1.*same number.*both shield and spear/);
+  });
+
+  it("rejects cross-practice shield/spear overlap", () => {
+    expect(() => {
+      normalizeVoiceCallConfig({
+        provider: "mock",
+        practices: {
+          p1: {
+            name: "Practice One",
+            shieldNumber: "+15551234567",
+            spearNumber: "+15551000001",
+            voiceGreeting: "Hello",
+            inboundSessionKey: "session-p1",
+          },
+          p2: {
+            name: "Practice Two",
+            shieldNumber: "+15559999999",
+            spearNumber: "+15551234567",
+            voiceGreeting: "Hello",
+            inboundSessionKey: "session-p2",
+          },
+        },
+      });
+    }).toThrow(/used as spear by.*p2.*but as shield by.*p1/);
+  });
+
+  it("allows config without practices field", () => {
+    expect(() => {
+      normalizeVoiceCallConfig({
+        provider: "mock",
+      });
+    }).not.toThrow();
+  });
+
+  it("allows empty practices object", () => {
+    expect(() => {
+      normalizeVoiceCallConfig({
+        provider: "mock",
+        practices: {},
+      });
+    }).not.toThrow();
+  });
+});

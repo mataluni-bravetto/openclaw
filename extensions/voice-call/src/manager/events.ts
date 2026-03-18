@@ -3,6 +3,7 @@ import { isAllowlistedCaller, normalizePhoneNumber } from "../allowlist.js";
 import type { CallRecord, CallState, NormalizedEvent } from "../types.js";
 import type { CallManagerContext } from "./context.js";
 import { findCall } from "./lookup.js";
+import { resolvePartnerFromNumber } from "./outbound-sessions.js";
 import { endCall } from "./outbound.js";
 import { addTranscriptEntry, transitionState } from "./state.js";
 import { persistCallRecord } from "./store.js";
@@ -25,6 +26,7 @@ type EventContext = Pick<
   | "transcriptWaiters"
   | "maxDurationTimers"
   | "onCallAnswered"
+  | "outboundSessions"
 >;
 
 function shouldAcceptInbound(config: EventContext["config"], from: string | undefined): boolean {
@@ -189,6 +191,64 @@ export function processEvent(ctx: EventContext, event: NormalizedEvent): void {
     case "call.answered":
       call.answeredAt = event.timestamp;
       transitionState(call, "answered");
+
+      // Magic Intercept: for inbound calls, check if caller matches a recent
+      // outbound session (patient calling back after we dialed them).
+      if (call.direction === "inbound" && ctx.outboundSessions.length > 0) {
+        const match = resolvePartnerFromNumber(call.from, call.to, ctx.outboundSessions);
+        if (match) {
+          // Inject practice routing context into metadata
+          call.metadata = {
+            ...call.metadata,
+            magicIntercept: true,
+            practiceId: match.practiceId,
+            patientName: match.patientName,
+            campaignId: match.campaignId,
+            interceptContext: match.context,
+          };
+
+          // Override greeting with personalized Magic Intercept message
+          const patientGreeting = match.patientName
+            ? `Hi ${match.patientName}! I was just calling you`
+            : "Hi! I was just calling you";
+          const contextSuffix = match.context ? ` about ${match.context}` : "";
+          call.metadata.initialMessage = `${patientGreeting}${contextSuffix}. How can I help?`;
+
+          // Route to practice-specific session if configured
+          if (!call.sessionKey) {
+            const practice = ctx.config.practices?.[match.practiceId];
+            if (practice?.inboundSessionKey) {
+              call.sessionKey = practice.inboundSessionKey;
+            }
+          }
+
+          console.log(
+            `[voice-call] Magic Intercept: matched inbound ${call.from} to practice ${match.practiceId}`,
+          );
+          persistCallRecord(ctx.storePath, call);
+        }
+      }
+
+      // For inbound calls without intercept, check practice-specific greeting
+      if (call.direction === "inbound" && !call.metadata?.magicIntercept && ctx.config.practices) {
+        for (const [practiceId, practice] of Object.entries(ctx.config.practices)) {
+          if (practice.shieldNumber === call.to || practice.spearNumber === call.to) {
+            call.metadata = {
+              ...call.metadata,
+              practiceId,
+            };
+            if (practice.voiceGreeting) {
+              call.metadata.initialMessage = practice.voiceGreeting;
+            }
+            if (!call.sessionKey && practice.inboundSessionKey) {
+              call.sessionKey = practice.inboundSessionKey;
+            }
+            persistCallRecord(ctx.storePath, call);
+            break;
+          }
+        }
+      }
+
       startMaxDurationTimer({
         ctx,
         callId: call.callId,

@@ -178,6 +178,26 @@ export const VoiceCallWebhookSecurityConfigSchema = z
 export type WebhookSecurityConfig = z.infer<typeof VoiceCallWebhookSecurityConfigSchema>;
 
 // -----------------------------------------------------------------------------
+// Practice Configuration (Shield/Spear 2-Number Architecture)
+// -----------------------------------------------------------------------------
+
+export const PracticeConfigSchema = z
+  .object({
+    /** Practice display name */
+    name: z.string().min(1),
+    /** Shield number (Number A) — inbound catch-net via conditional call forwarding */
+    shieldNumber: E164Schema,
+    /** Spear number (Number B) — outbound only, protects main line reputation */
+    spearNumber: E164Schema,
+    /** Custom inbound greeting for this practice */
+    voiceGreeting: z.string().optional(),
+    /** Route inbound calls to a specific agent session */
+    inboundSessionKey: z.string().optional(),
+  })
+  .strict();
+export type PracticeConfig = z.infer<typeof PracticeConfigSchema>;
+
+// -----------------------------------------------------------------------------
 // Outbound Call Configuration
 // -----------------------------------------------------------------------------
 
@@ -336,6 +356,9 @@ export const VoiceCallConfigSchema = z
     /** TTS override (deep-merges with core messages.tts) */
     tts: TtsConfigSchema,
 
+    /** Practice-to-number mapping for 2-Number architecture */
+    practices: z.record(z.string(), PracticeConfigSchema).optional(),
+
     /** Store path for call logs */
     store: z.string().optional(),
 
@@ -382,7 +405,7 @@ function normalizeVoiceCallTtsConfig(
 
 export function normalizeVoiceCallConfig(config: VoiceCallConfigInput): VoiceCallConfig {
   const defaults = cloneDefaultVoiceCallConfig();
-  return {
+  const normalized = {
     ...defaults,
     ...config,
     allowFrom: config.allowFrom ?? defaults.allowFrom,
@@ -400,7 +423,68 @@ export function normalizeVoiceCallConfig(config: VoiceCallConfigInput): VoiceCal
     streaming: { ...defaults.streaming, ...config.streaming },
     stt: { ...defaults.stt, ...config.stt },
     tts: normalizeVoiceCallTtsConfig(defaults.tts, config.tts),
+    practices: config.practices as VoiceCallConfig["practices"],
   };
+
+  // Validate practice number uniqueness
+  if (normalized.practices) {
+    validatePracticeNumbers(normalized.practices);
+  }
+
+  return normalized;
+}
+
+/**
+ * Validate that no two practices share shield or spear numbers.
+ * Throws an error with actionable message if duplicates are found.
+ */
+function validatePracticeNumbers(
+  practices: Record<string, z.infer<typeof PracticeConfigSchema>>,
+): void {
+  const shieldNumbers = new Map<string, string>();
+  const spearNumbers = new Map<string, string>();
+
+  for (const [practiceId, practice] of Object.entries(practices)) {
+    // Check shield number
+    const existingShield = shieldNumbers.get(practice.shieldNumber);
+    if (existingShield) {
+      throw new Error(
+        `[voice-call] Practice number conflict: shield number ${practice.shieldNumber} is used by both "${existingShield}" and "${practiceId}"`,
+      );
+    }
+    shieldNumbers.set(practice.shieldNumber, practiceId);
+
+    // Check spear number
+    const existingSpear = spearNumbers.get(practice.spearNumber);
+    if (existingSpear) {
+      throw new Error(
+        `[voice-call] Practice number conflict: spear number ${practice.spearNumber} is used by both "${existingSpear}" and "${practiceId}"`,
+      );
+    }
+    spearNumbers.set(practice.spearNumber, practiceId);
+
+    // Check for shield/spear overlap within same practice
+    if (practice.shieldNumber === practice.spearNumber) {
+      throw new Error(
+        `[voice-call] Practice "${practiceId}" has the same number (${practice.shieldNumber}) for both shield and spear. These must be different.`,
+      );
+    }
+
+    // Check for cross-practice shield/spear overlap
+    const shieldUsedAsSpear = spearNumbers.get(practice.shieldNumber);
+    if (shieldUsedAsSpear && shieldUsedAsSpear !== practiceId) {
+      throw new Error(
+        `[voice-call] Practice number conflict: ${practice.shieldNumber} is used as shield by "${practiceId}" but as spear by "${shieldUsedAsSpear}"`,
+      );
+    }
+
+    const spearUsedAsShield = shieldNumbers.get(practice.spearNumber);
+    if (spearUsedAsShield && spearUsedAsShield !== practiceId) {
+      throw new Error(
+        `[voice-call] Practice number conflict: ${practice.spearNumber} is used as spear by "${practiceId}" but as shield by "${spearUsedAsShield}"`,
+      );
+    }
+  }
 }
 
 /**

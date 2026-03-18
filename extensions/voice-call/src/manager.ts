@@ -6,6 +6,12 @@ import type { CallManagerContext } from "./manager/context.js";
 import { processEvent as processManagerEvent } from "./manager/events.js";
 import { getCallByProviderCallId as getCallByProviderCallIdFromMaps } from "./manager/lookup.js";
 import {
+  createOutboundSession,
+  loadOutboundSessions,
+  persistOutboundSession,
+  type OutboundSession,
+} from "./manager/outbound-sessions.js";
+import {
   continueCall as continueCallWithContext,
   endCall as endCallWithContext,
   initiateCall as initiateCallWithContext,
@@ -64,6 +70,7 @@ export class CallManager {
     }
   >();
   private maxDurationTimers = new Map<CallId, NodeJS.Timeout>();
+  private outboundSessions: OutboundSession[] = [];
 
   constructor(config: VoiceCallConfig, storePath?: string) {
     this.config = config;
@@ -79,6 +86,9 @@ export class CallManager {
     this.webhookUrl = webhookUrl;
 
     fs.mkdirSync(this.storePath, { recursive: true });
+
+    // Load outbound sessions for Magic Intercept
+    this.outboundSessions = loadOutboundSessions(this.storePath);
 
     const persisted = loadActiveCallsFromStore(this.storePath);
     this.processedEventIds = persisted.processedEventIds;
@@ -256,6 +266,7 @@ export class CallManager {
       activeTurnCalls: this.activeTurnCalls,
       transcriptWaiters: this.transcriptWaiters,
       maxDurationTimers: this.maxDurationTimers,
+      outboundSessions: this.outboundSessions,
       onCallAnswered: (call) => {
         this.maybeSpeakInitialMessageOnAnswered(call);
       },
@@ -282,6 +293,61 @@ export class CallManager {
     }
 
     void this.speakInitialMessage(call.providerCallId);
+  }
+
+  /**
+   * Record an outbound session for Magic Intercept.
+   * Call this after initiateCall() when dialing a patient from a practice's
+   * spear number. Enables callback recognition within the expiry window.
+   */
+  recordOutboundSession(params: {
+    callId: string;
+    practiceId: string;
+    patientPhone: string;
+    patientName?: string;
+    campaignId?: string;
+    context?: string;
+    callbackWindowMs?: number;
+  }): OutboundSession | null {
+    const practice = this.config.practices?.[params.practiceId];
+    if (!practice) {
+      console.warn(`[voice-call] Practice ${params.practiceId} not found in config`);
+      return null;
+    }
+
+    const session = createOutboundSession({
+      callId: params.callId,
+      practiceId: params.practiceId,
+      patientPhone: params.patientPhone,
+      spearNumber: practice.spearNumber,
+      shieldNumber: practice.shieldNumber,
+      campaignId: params.campaignId,
+      patientName: params.patientName,
+      context: params.context,
+      callbackWindowMs: params.callbackWindowMs,
+    });
+
+    this.outboundSessions.push(session);
+    persistOutboundSession(this.storePath, session);
+
+    console.log(
+      `[voice-call] Recorded outbound session ${session.outboundSessionId} for practice ${params.practiceId}`,
+    );
+    return session;
+  }
+
+  /**
+   * Resolve a practice by its shield or spear number.
+   */
+  findPracticeByNumber(
+    phoneNumber: string,
+  ): { practiceId: string; role: "shield" | "spear" } | null {
+    if (!this.config.practices) return null;
+    for (const [practiceId, practice] of Object.entries(this.config.practices)) {
+      if (practice.shieldNumber === phoneNumber) return { practiceId, role: "shield" };
+      if (practice.spearNumber === phoneNumber) return { practiceId, role: "spear" };
+    }
+    return null;
   }
 
   /**

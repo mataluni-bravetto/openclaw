@@ -13,6 +13,9 @@
 ## Project Structure & Module Organization
 
 - Source code: `src/` (CLI wiring in `src/cli`, commands in `src/commands`, web provider in `src/provider-web.ts`, infra in `src/infra`, media pipeline in `src/media`).
+- Centralized Utilities: Use `src/infra/` (e.g. `src/infra/format-time` for formatting age/duration/elapsed time - never create local copies).
+- Terminal Output: Use `src/terminal/table.ts` (`renderTable`), `src/terminal/theme.ts` for consistent generic colors, and `src/cli/progress.ts` for spinners.
+- CLI Framework: Built with Commander + `clack/prompts`. Wiring lives in `src/cli/`, commands in `src/commands/`. Dependency injection via `createDefaultDeps`.
 - Tests: colocated `*.test.ts`.
 - Docs: `docs/` (images, queue, Pi config). Built output lives in `dist/`.
 - Plugins/extensions: live under `extensions/*` (workspace packages). Keep plugin-only deps in the extension `package.json`; do not add them to the root `package.json` unless core uses them.
@@ -77,6 +80,8 @@
 ## Coding Style & Naming Conventions
 
 - Language: TypeScript (ESM). Prefer strict typing; avoid `any`.
+- Imports: Use `.js` extension for cross-package imports (ESM). Direct imports only - no re-export wrapper files. Use `import type { X }` for type-only imports.
+- Anti-redundancy: Always reuse existing code - no redundancy! Avoid files that just re-export from another file. If a function already exists, import it - do NOT create a duplicate in another file. Before creating any formatter, utility, or helper, search for existing implementations first.
 - Formatting/linting via Oxlint and Oxfmt; run `pnpm check` before commits.
 - Never add `@ts-nocheck` and do not disable `no-explicit-any`; fix root causes and update Oxlint/Oxfmt config only when required.
 - Dynamic import guardrail: do not mix `await import("x")` and static `import ... from "x"` for the same module in production code paths. If you need lazy loading, create a dedicated `*.runtime.ts` boundary (that re-exports from `x`) and dynamically import that boundary from lazy callers only.
@@ -264,3 +269,14 @@
   - `node --import tsx scripts/release-check.ts`
   - `pnpm release:check`
   - `pnpm test:install:smoke` or `OPENCLAW_INSTALL_SMOKE_SKIP_NONROOT=1 pnpm test:install:smoke` for non-root smoke path.
+
+## Monorepo Context: Bravetto Voice Architecture
+
+This repository (`openclaw`) exists within the broader Bravetto Voice first monorepo. When interacting with other systems or designing integrations, adhere to the established voice architecture.
+
+**Key Architecture Points:**
+
+- **Centralized Engine**: 12 voice surfaces across 8 repos rely on `voice.bravetto.ai` as the canonical service (except Advanced Ring which defaults to Gemini Live for bidirectional audio).
+- **Standard Protocol**: Almost all surfaces rely on ElevenLabs with the standard contract `POST /speak` -> `audio/mpeg` raw stream.
+- **Voice Registry**: The source of truth for voices is `VOICE-PROFILE-STANDARD.md` (lib/speak.js maps 10 defined voices, default is `abe`).
+- **AI Brains**: Use context-appropriate models (e.g., Claude Haiku 4.5 for latency/phone, Gemini 2.5 Flash for real-time bidir, Claude Opus 4.6 for long context).
